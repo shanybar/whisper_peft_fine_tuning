@@ -4,72 +4,15 @@ import torch
 import evaluate
 import numpy as np
 from tqdm import tqdm
-from datasets import Audio
-from dataclasses import dataclass
 from torch.utils.data import DataLoader
-from typing import Any, Dict, List, Union
-from transformers import WhisperTokenizer
-from transformers import WhisperProcessor
-from datasets import load_dataset, DatasetDict
-from transformers import WhisperFeatureExtractor
 from peft import prepare_model_for_int8_training
 from transformers import Seq2SeqTrainingArguments
 from transformers import WhisperForConditionalGeneration
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
-from peft import LoraConfig, PeftModel, LoraModel, LoraConfig, get_peft_model, PeftConfig
+from peft import PeftModel, LoraConfig, get_peft_model, PeftConfig
+from src.data.data_processing import load_data, prepare_dataset, DataCollatorSpeechSeq2SeqWithPadding
+from transformers import WhisperTokenizer, WhisperProcessor, WhisperFeatureExtractor
 from transformers import Seq2SeqTrainer, TrainerCallback, TrainingArguments, TrainerState, TrainerControl
-
-
-def load_data(lang):
-    common_voice = DatasetDict()
-
-    common_voice["train"] = load_dataset("mozilla-foundation/common_voice_11_0", lang, split="train+validation",
-                                         use_auth_token=True)
-    common_voice["test"] = load_dataset("mozilla-foundation/common_voice_11_0", lang, split="test", use_auth_token=True)
-    common_voice = common_voice.remove_columns(
-        ["accent", "age", "client_id", "down_votes", "gender", "locale", "path", "segment", "up_votes"])
-
-    common_voice = common_voice.cast_column("audio", Audio(sampling_rate=16000))
-
-    return common_voice
-
-
-def prepare_dataset(batch, feature_extractor, tokenizer):
-    audio = batch["audio"]
-
-    # compute log-Mel input features from input audio array
-    batch["input_features"] = feature_extractor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
-
-    # encode target text to label ids
-    batch["labels"] = tokenizer(batch["sentence"]).input_ids
-    return batch
-
-@dataclass
-class DataCollatorSpeechSeq2SeqWithPadding:
-    processor: Any
-
-    def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        # split inputs and labels since they have to be of different lengths and need different padding methods
-        # first treat the audio inputs by simply returning torch tensors
-        input_features = [{"input_features": feature["input_features"]} for feature in features]
-        batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
-
-        # get the tokenized label sequences
-        label_features = [{"input_ids": feature["labels"]} for feature in features]
-        # pad the labels to max length
-        labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
-
-        # replace padding with -100 to ignore loss correctly
-        labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
-
-        # if bos token is appended in previous tokenization step,
-        # cut bos token here as it's append later anyways
-        if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().cpu().item():
-            labels = labels[:, 1:]
-
-        batch["labels"] = labels
-
-        return batch
 
 
 class SavePeftModelCallback(TrainerCallback):
