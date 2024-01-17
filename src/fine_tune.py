@@ -52,7 +52,7 @@ def compute_metrics(pred, tokenizer, metric):
 def train_model(model_name_or_path, speech_data, data_collator, processor):
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-    model = WhisperForConditionalGeneration.from_pretrained(model_name_or_path, load_in_8bit=True)
+    model = WhisperForConditionalGeneration.from_pretrained(model_name_or_path, load_in_8bit=True, device_map='auto')
     model.config.forced_decoder_ids = None
     model.config.suppress_tokens = []
 
@@ -97,7 +97,7 @@ def train_model(model_name_or_path, speech_data, data_collator, processor):
     trainer.train()
 
 
-def eval(speech_data, data_collator, tokenizer, metric):
+def eval_model(speech_data, data_collator, tokenizer, metric):
     peft_model_id = "" # TBD
     peft_config = PeftConfig.from_pretrained(peft_model_id)
     model = WhisperForConditionalGeneration.from_pretrained(
@@ -133,21 +133,26 @@ def eval(speech_data, data_collator, tokenizer, metric):
     wer = 100 * metric.compute()
     print(f"{wer=}")
 
+
 def train_and_eval_model():
     model_name_or_path = "openai/whisper-small"
     feature_extractor = WhisperFeatureExtractor.from_pretrained("openai/whisper-base")
-    tokenizer = WhisperTokenizer.from_pretrained(model_name_or_path, language="Hindi", task="transcribe")
-    processor = WhisperProcessor.from_pretrained(model_name_or_path, language="Hindi", task="transcribe")
-    lang = 'it'
-    common_voice = load_data(lang)
-    common_voice = common_voice.map(prepare_dataset, feature_extractor, tokenizer,
-                                    remove_columns=common_voice.column_names["train"], num_proc=4)
+    lang_name = "Greek"
+    lang_short = 'el'  # Greek
+    tokenizer = WhisperTokenizer.from_pretrained(model_name_or_path, language=lang_name, task="transcribe")
+    processor = WhisperProcessor.from_pretrained(model_name_or_path, language=lang_name, task="transcribe")
+
+    common_voice = load_data(lang_short)
+
+    common_voice = common_voice.map(lambda n: prepare_dataset(n, feature_extractor=feature_extractor,
+                                    tokenizer=tokenizer),
+                                    remove_columns=common_voice.column_names["train"])
 
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
     metric = evaluate.load("wer")
 
     train_model(model_name_or_path, common_voice, data_collator, processor)
-    # eval(common_voice, data_collator, tokenizer, metric)
+    # eval_model(common_voice, data_collator, tokenizer, metric)
 
 if __name__ == '__main__':
     train_and_eval_model()

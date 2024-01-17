@@ -8,9 +8,8 @@ from datasets import load_dataset, DatasetDict
 def load_data(lang):
     common_voice = DatasetDict()
 
-    common_voice["train"] = load_dataset("mozilla-foundation/common_voice_11_0", lang, split="train+validation",
-                                         use_auth_token=True)
-    common_voice["test"] = load_dataset("mozilla-foundation/common_voice_11_0", lang, split="test", use_auth_token=True)
+    common_voice["train"] = load_dataset("mozilla-foundation/common_voice_11_0", lang, split="train+validation")
+    common_voice["test"] = load_dataset("mozilla-foundation/common_voice_11_0", lang, split="test")
     common_voice = common_voice.remove_columns(
         ["accent", "age", "client_id", "down_votes", "gender", "locale", "path", "segment", "up_votes"])
 
