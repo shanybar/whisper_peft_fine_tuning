@@ -49,32 +49,32 @@ def compute_metrics(pred, tokenizer, metric):
     return {"wer": wer}
 
 
-def train_model(model_name_or_path, speech_data, data_collator, processor):
+def train_model(model_name_or_path, speech_data, data_collator, processor, tokenizer, metric):
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-    model = WhisperForConditionalGeneration.from_pretrained(model_name_or_path, load_in_8bit=True, device_map='auto')
+    model = WhisperForConditionalGeneration.from_pretrained(model_name_or_path, device_map='auto')
     model.config.forced_decoder_ids = None
     model.config.suppress_tokens = []
 
-    model = prepare_model_for_int8_training(model)
+    # model = prepare_model_for_int8_training(model)
 
-    config = LoraConfig(r=32, lora_alpha=64, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none")
+    config = LoraConfig(r=16, lora_alpha=64, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none")
 
     model = get_peft_model(model, config)
     model.print_trainable_parameters()
 
     training_args = Seq2SeqTrainingArguments(
         output_dir="training_output",  # change to a repo name of your choice
-        per_device_train_batch_size=8,
-        gradient_accumulation_steps=3,  # increase by 2x for every 2x decrease in batch size
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=4,  # increase by 2x for every 2x decrease in batch size
         learning_rate=1e-3,
         warmup_steps=50,
         num_train_epochs=2,
         evaluation_strategy="epoch",
         fp16=True,
-        per_device_eval_batch_size=8,
+        per_device_eval_batch_size=2,
         # the argument below can't be passed to Trainer because it internally calls transformer's generate without autocasting (to int8) leading to errors
-        # predict_with_generate=True,
+        predict_with_generate=True,
         generation_max_length=128,
         logging_steps=25,
         remove_unused_columns=False,
@@ -88,7 +88,7 @@ def train_model(model_name_or_path, speech_data, data_collator, processor):
         train_dataset=speech_data["train"],
         eval_dataset=speech_data["test"],
         data_collator=data_collator,
-        # compute_metrics=compute_metrics,
+        compute_metrics=lambda n: compute_metrics(n, metric=metric,tokenizer=tokenizer),
         tokenizer=processor.feature_extractor,
         callbacks=[SavePeftModelCallback],
     )
@@ -101,7 +101,7 @@ def eval_model(speech_data, data_collator, tokenizer, metric):
     peft_model_id = "" # TBD
     peft_config = PeftConfig.from_pretrained(peft_model_id)
     model = WhisperForConditionalGeneration.from_pretrained(
-        peft_config.base_model_name_or_path, load_in_8bit=True, device_map="auto"
+        peft_config.base_model_name_or_path, device_map="auto"
     )
     model = PeftModel.from_pretrained(model, peft_model_id)
 
@@ -135,8 +135,8 @@ def eval_model(speech_data, data_collator, tokenizer, metric):
 
 
 def train_and_eval_model():
-    model_name_or_path = "openai/whisper-small"
-    feature_extractor = WhisperFeatureExtractor.from_pretrained("openai/whisper-base")
+    model_name_or_path = "openai/whisper-tiny"
+    feature_extractor = WhisperFeatureExtractor.from_pretrained(model_name_or_path)
     lang_name = "Greek"
     lang_short = 'el'  # Greek
     tokenizer = WhisperTokenizer.from_pretrained(model_name_or_path, language=lang_name, task="transcribe")
@@ -151,7 +151,7 @@ def train_and_eval_model():
     data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
     metric = evaluate.load("wer")
 
-    train_model(model_name_or_path, common_voice, data_collator, processor)
+    train_model(model_name_or_path, common_voice, data_collator, processor, tokenizer, metric)
     # eval_model(common_voice, data_collator, tokenizer, metric)
 
 if __name__ == '__main__':
