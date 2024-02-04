@@ -9,10 +9,11 @@ from peft import prepare_model_for_int8_training
 from transformers import Seq2SeqTrainingArguments
 from transformers import WhisperForConditionalGeneration
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
-from peft import PeftModel, LoraConfig, get_peft_model, PeftConfig
-from src.data.data_processing import load_data, prepare_dataset, DataCollatorSpeechSeq2SeqWithPadding
 from transformers import WhisperTokenizer, WhisperProcessor, WhisperFeatureExtractor
-from transformers import Seq2SeqTrainer, TrainerCallback, TrainingArguments, TrainerState, TrainerControl
+from peft import PeftModel, LoraConfig, get_peft_model, PeftConfig, prepare_model_for_kbit_training
+from src.data.data_processing import load_data, prepare_dataset, DataCollatorSpeechSeq2SeqWithPadding
+from transformers import Seq2SeqTrainer, TrainerCallback,\
+    TrainingArguments, TrainerState, TrainerControl, BitsAndBytesConfig
 
 
 class SavePeftModelCallback(TrainerCallback):
@@ -52,27 +53,37 @@ def compute_metrics(pred, tokenizer, metric):
 def train_model(model_name_or_path, speech_data, data_collator, processor, tokenizer, metric):
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-    model = WhisperForConditionalGeneration.from_pretrained(model_name_or_path, device_map='auto')
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16
+    )
+
+    model = WhisperForConditionalGeneration.from_pretrained(model_name_or_path, quantization_config=bnb_config,
+                                                            device_map='auto')
     model.config.forced_decoder_ids = None
     model.config.suppress_tokens = []
 
     # model = prepare_model_for_int8_training(model)
 
-    config = LoraConfig(r=16, lora_alpha=64, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none")
+    lora_config = LoraConfig(r=16, lora_alpha=64, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none")
 
-    model = get_peft_model(model, config)
+    model.gradient_checkpointing_enable()
+    model = prepare_model_for_kbit_training(model)
+    model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
     training_args = Seq2SeqTrainingArguments(
         output_dir="training_output",  # change to a repo name of your choice
         per_device_train_batch_size=2,
         gradient_accumulation_steps=4,  # increase by 2x for every 2x decrease in batch size
-        learning_rate=1e-3,
-        warmup_steps=50,
-        num_train_epochs=2,
+        learning_rate=1e-4,
+        warmup_steps=100,
+        num_train_epochs=5,
         evaluation_strategy="epoch",
         fp16=True,
-        per_device_eval_batch_size=2,
+        per_device_eval_batch_size=4,
         # the argument below can't be passed to Trainer because it internally calls transformer's generate without autocasting (to int8) leading to errors
         predict_with_generate=True,
         generation_max_length=128,
@@ -80,6 +91,7 @@ def train_model(model_name_or_path, speech_data, data_collator, processor, token
         remove_unused_columns=False,
         # required as the PeftModel forward doesn't have the signature of the wrapped model's forward
         label_names=["labels"],  # same reason as above
+        optim="paged_adamw_8bit"
     )
 
     trainer = Seq2SeqTrainer(
@@ -135,7 +147,7 @@ def eval_model(speech_data, data_collator, tokenizer, metric):
 
 
 def train_and_eval_model():
-    model_name_or_path = "openai/whisper-tiny"
+    model_name_or_path = "openai/whisper-base"
     feature_extractor = WhisperFeatureExtractor.from_pretrained(model_name_or_path)
     lang_name = "Greek"
     lang_short = 'el'  # Greek
